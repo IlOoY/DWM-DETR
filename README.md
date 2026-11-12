@@ -1,40 +1,56 @@
-# DWM-DETR — 三个核心模块
+# DWM-DETR: Core Modules for Flame and Smoke Detection
 
-本仓库只提供三个改进模块及其必要的局部辅助定义，不包含完整检测器、训练框架、数据集、权重或实验日志。
+This repository provides the three core modules of DWM-DETR: deformable feature extraction in the final backbone stage, dual-stream spatial and wavelet downsampling, and shared scale-conditioned mixture-of-experts encoding.
 
-| 模块 | 核心代码 | 内容 |
+| Module | Source file | Implementation |
 | --- | --- | --- |
-| 末级可变形残差模块 | [dcn_stage5.py](dcn_stage5.py) | DCNv2、残差连接以及R18末级两个残差块，共四个3×3可变形卷积 |
-| 双流小波下采样 DSWD | [dswd.py](dswd.py) | 空间卷积分支、完整Haar四子带分支及仅对小波输出施加的可学习标量 |
-| 共享尺度专家编码 MoSME | [mosme.py](mosme.py) | 常开共享专家、逐令牌Top-2路由、层级嵌入、共享注意力和出口归一化 |
+| Deformable residual stage | [dcn_stage5.py](dcn_stage5.py) | Two residual blocks in the final R18-vd backbone stage, with four 3 x 3 modulated deformable convolutions and the corresponding residual shortcuts. |
+| Dual-stream wavelet downsampling (DSWD) | [dswd.py](dswd.py) | A spatial convolution branch and a Haar branch using all four subbands. A learnable sigmoid-gated scalar weights the wavelet output before addition to the spatial output. |
+| Shared scale-conditioned expert encoding (MoSME) | [mosme.py](mosme.py) | Shared self-attention, scale-conditioned token routing, an always-active shared expert, Top-2 selection from four routed experts, and output layer normalization. |
 
-代码从提供的本地实现提取，保留核心类的计算逻辑，补入必要的激活函数辅助定义。两个构造函数用于显示原模型的模块组装方式。
+## Scope
 
-## 依赖
+The modules were extracted from the DWM-DETR implementation. Their core computations are retained, with the required activation helpers and two constructor functions included to illustrate module assembly.
 
-需要相互兼容的 `torch` 和 `torchvision`，且torchvision包含可用的 `deform_conv2d` 算子。主专家实现中的 `torch_scatter` 为可选依赖，保留原实现的PyTorch聚合回退路径。
+This repository contains module-level source code. The complete detector, training framework, experiment configuration files, datasets, pretrained weights, and experimental logs are outside its scope. These files alone do not reproduce the full experiments reported in the manuscript.
 
-## 使用方式
+## Requirements
+
+- Compatible installations of PyTorch and torchvision.
+- A working `torchvision.ops.deform_conv2d` operator for the deformable residual stage.
+- `torch_scatter` is optional; the expert aggregation code retains a native PyTorch fallback.
+
+## Usage
 
 ```python
+import torch
+
 from dcn_stage5 import build_deformable_stage5
 from dswd import DualStreamDownsample
 from mosme import build_shared_scale_encoder
 
-stage5 = build_deformable_stage5(256, 512)
-downsample = DualStreamDownsample(256, 256)
+stage5 = build_deformable_stage5(in_channels=256, out_channels=512)
+downsample = DualStreamDownsample(in_channels=256, out_channels=256)
 encoder = build_shared_scale_encoder()
 
-# tokens_s4和tokens_s5分别为[B, N4, 256]与[B, N5, 256]。
-# 两个尺度分别调用同一个encoder实例，实现参数共享。
-out_s4, loss_s4 = encoder(tokens_s4, scale_index=0, pos_embed=pos_s4)
-out_s5, loss_s5 = encoder(tokens_s5, scale_index=1, pos_embed=pos_s5)
+# Example token sequences: [batch_size, number_of_tokens, hidden_dimension].
+tokens_s4 = torch.randn(1, 64, 256)
+tokens_s5 = torch.randn(1, 16, 256)
+
+# Call the same encoder separately for the two scales to share its parameters.
+# Positional embeddings may be supplied through the pos_embed argument.
+encoder.eval()
+with torch.no_grad():
+    out_s4, balance_s4 = encoder(tokens_s4, scale_index=0)
+    out_s5, balance_s5 = encoder(tokens_s5, scale_index=1)
 ```
 
-DSWD输入的高、宽应为偶数。MoSME返回的均衡项需由调用方按实际训练方案汇总；此处不提供训练循环。
+DSWD expects an input feature map with even height and width. During training, the MoSME encoder returns an auxiliary balance-loss term alongside the encoded tokens. The calling training loop must incorporate that term into the objective if required by the training protocol; no training loop is included here.
 
-已核对Python语法、核心定义与原源码的AST一致性及局部依赖。本次未运行GPU训练或算子运行测试。
+## Verification
 
-## 来源
+Python syntax and the abstract syntax trees of the extracted core definitions were checked against the supplied implementation. GPU training, inference, and operator execution were not tested as part of this extraction.
 
-基础实现来自 [RT-DETR / RT-DETRv2](https://github.com/lyuwenyu/RT-DETR)，保留相关版权说明。上游许可证条款及本地修改说明见[NOTICE.md](NOTICE.md)。本次未为项目改动新增授权许可。
+## Attribution
+
+The implementation builds on [RT-DETR / RT-DETRv2](https://github.com/lyuwenyu/RT-DETR). Upstream copyright notices and license terms are retained in [NOTICE.md](NOTICE.md). Inclusion of the upstream license does not assign a new license to project-specific modifications.
